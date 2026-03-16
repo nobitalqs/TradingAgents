@@ -31,10 +31,27 @@ dependencies = [
     "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
     "yfinance>=0.2.63",
+    # Enhanced orchestration dependencies
+    "apscheduler>=3.10",
+    "aiohttp>=3.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
 ]
 
 [project.scripts]
 tradingagents = "cli.main:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
 
 [tool.setuptools.packages.find]
 include = ["tradingagents*", "cli*"]
