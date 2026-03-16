@@ -22,6 +22,14 @@ class SignalProcessingError(TradingAgentsError):
         super().__init__(f"Failed to extract signal from: {self.raw_output}")
 
 
+class DecisionExtractionError(TradingAgentsError):
+    """Decision extraction from LLM output failed."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(f"Decision extraction failed: {reason}")
+
+
 class VerificationError(TradingAgentsError):
     """Data verification failed — credibility below threshold."""
 
