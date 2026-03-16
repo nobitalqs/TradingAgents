@@ -1,55 +1,22 @@
-import time
-import json
+"""Aggressive Risk Debater — champions high-reward strategies."""
+
+from tradingagents.agents.risk_mgmt._risk_debate_factory import create_risk_debator
+
+SYSTEM_MESSAGE = """As the Aggressive Risk Analyst, champion high-reward, high-risk opportunities. Focus on:
+1. UPSIDE POTENTIAL: Growth opportunities, competitive advantages, market timing
+2. OPPORTUNITY COST: What the trader misses by being too conservative
+3. COUNTER CONSERVATIVE: Challenge overly cautious assumptions with data
+4. COUNTER NEUTRAL: Show why balanced approaches may underperform
+5. BOLD STRATEGY: Argue for decisive action over hedging
+
+Engage directly with the other analysts' points. Debate, don't just list data."""
 
 
 def create_aggressive_debator(llm):
-    def aggressive_node(state) -> dict:
-        risk_debate_state = state["risk_debate_state"]
-        history = risk_debate_state.get("history", "")
-        aggressive_history = risk_debate_state.get("aggressive_history", "")
-
-        current_conservative_response = risk_debate_state.get("current_conservative_response", "")
-        current_neutral_response = risk_debate_state.get("current_neutral_response", "")
-
-        market_research_report = state["market_report"]
-        sentiment_report = state["sentiment_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
-
-        trader_decision = state["trader_investment_plan"]
-
-        prompt = f"""As the Aggressive Risk Analyst, your role is to actively champion high-reward, high-risk opportunities, emphasizing bold strategies and competitive advantages. When evaluating the trader's decision or plan, focus intently on the potential upside, growth potential, and innovative benefits—even when these come with elevated risk. Use the provided market data and sentiment analysis to strengthen your arguments and challenge the opposing views. Specifically, respond directly to each point made by the conservative and neutral analysts, countering with data-driven rebuttals and persuasive reasoning. Highlight where their caution might miss critical opportunities or where their assumptions may be overly conservative. Here is the trader's decision:
-
-{trader_decision}
-
-Your task is to create a compelling case for the trader's decision by questioning and critiquing the conservative and neutral stances to demonstrate why your high-reward perspective offers the best path forward. Incorporate insights from the following sources into your arguments:
-
-Market Research Report: {market_research_report}
-Social Media Sentiment Report: {sentiment_report}
-Latest World Affairs Report: {news_report}
-Company Fundamentals Report: {fundamentals_report}
-Here is the current conversation history: {history} Here are the last arguments from the conservative analyst: {current_conservative_response} Here are the last arguments from the neutral analyst: {current_neutral_response}. If there are no responses from the other viewpoints, do not hallucinate and just present your point.
-
-Engage actively by addressing any specific concerns raised, refuting the weaknesses in their logic, and asserting the benefits of risk-taking to outpace market norms. Maintain a focus on debating and persuading, not just presenting data. Challenge each counterpoint to underscore why a high-risk approach is optimal. Output conversationally as if you are speaking without any special formatting."""
-
-        response = llm.invoke(prompt)
-
-        argument = f"Aggressive Analyst: {response.content}"
-
-        new_risk_debate_state = {
-            "history": history + "\n" + argument,
-            "aggressive_history": aggressive_history + "\n" + argument,
-            "conservative_history": risk_debate_state.get("conservative_history", ""),
-            "neutral_history": risk_debate_state.get("neutral_history", ""),
-            "latest_speaker": "Aggressive",
-            "current_aggressive_response": argument,
-            "current_conservative_response": risk_debate_state.get("current_conservative_response", ""),
-            "current_neutral_response": risk_debate_state.get(
-                "current_neutral_response", ""
-            ),
-            "count": risk_debate_state["count"] + 1,
-        }
-
-        return {"risk_debate_state": new_risk_debate_state}
-
-    return aggressive_node
+    """Create the Aggressive Risk Debater node."""
+    return create_risk_debator(
+        llm=llm,
+        stance="Aggressive",
+        system_message=SYSTEM_MESSAGE,
+        history_key="aggressive_history",
+    )
