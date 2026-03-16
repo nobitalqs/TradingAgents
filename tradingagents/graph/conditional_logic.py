@@ -1,67 +1,59 @@
-# TradingAgents/graph/conditional_logic.py
+"""Conditional logic for graph flow control — factory-generated routers."""
 
-from tradingagents.agents.utils.agent_states import AgentState
+from __future__ import annotations
+
+import logging
+
+from tradingagents.constants import msg_clear_node_name, tools_node_name
+
+logger = logging.getLogger("tradingagents.graph.conditional")
 
 
 class ConditionalLogic:
     """Handles conditional logic for determining graph flow."""
 
-    def __init__(self, max_debate_rounds=1, max_risk_discuss_rounds=1):
-        """Initialize with configuration parameters."""
+    def __init__(self, max_debate_rounds: int = 1, max_risk_discuss_rounds: int = 1):
         self.max_debate_rounds = max_debate_rounds
         self.max_risk_discuss_rounds = max_risk_discuss_rounds
 
-    def should_continue_market(self, state: AgentState):
-        """Determine if market analysis should continue."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_market"
-        return "Msg Clear Market"
+    def make_analyst_router(self, analyst_type: str) -> callable:
+        """Factory-generated router for analyst tool loops.
 
-    def should_continue_social(self, state: AgentState):
-        """Determine if social media analysis should continue."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_social"
-        return "Msg Clear Social"
+        Returns a function that checks if the last message has tool_calls.
+        If yes → route to tools node; if no → route to message clear node.
+        """
+        tools_name = tools_node_name(analyst_type)
+        clear_name = msg_clear_node_name(analyst_type)
 
-    def should_continue_news(self, state: AgentState):
-        """Determine if news analysis should continue."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_news"
-        return "Msg Clear News"
+        def router(state: dict) -> str:
+            messages = state.get("messages", [])
+            if not messages:
+                return clear_name
+            last_message = messages[-1]
+            if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+                return tools_name
+            return clear_name
 
-    def should_continue_fundamentals(self, state: AgentState):
-        """Determine if fundamentals analysis should continue."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_fundamentals"
-        return "Msg Clear Fundamentals"
+        return router
 
-    def should_continue_debate(self, state: AgentState) -> str:
-        """Determine if debate should continue."""
-
-        if (
-            state["investment_debate_state"]["count"] >= 2 * self.max_debate_rounds
-        ):  # 3 rounds of back-and-forth between 2 agents
+    def should_continue_debate(self, state: dict) -> str:
+        """Determine if investment debate should continue."""
+        debate = state["investment_debate_state"]
+        if debate["count"] >= 2 * self.max_debate_rounds:
             return "Research Manager"
-        if state["investment_debate_state"]["current_response"].startswith("Bull"):
+        current = debate.get("current_response", "")
+        if isinstance(current, str) and current.startswith("Bull"):
             return "Bear Researcher"
         return "Bull Researcher"
 
-    def should_continue_risk_analysis(self, state: AgentState) -> str:
-        """Determine if risk analysis should continue."""
-        if (
-            state["risk_debate_state"]["count"] >= 3 * self.max_risk_discuss_rounds
-        ):  # 3 rounds of back-and-forth between 3 agents
+    def should_continue_risk_analysis(self, state: dict) -> str:
+        """Determine if risk analysis debate should continue."""
+        risk = state["risk_debate_state"]
+        if risk["count"] >= 3 * self.max_risk_discuss_rounds:
             return "Risk Judge"
-        if state["risk_debate_state"]["latest_speaker"].startswith("Aggressive"):
+        speaker = risk.get("latest_speaker", "")
+        if speaker.startswith("Aggressive"):
             return "Conservative Analyst"
-        if state["risk_debate_state"]["latest_speaker"].startswith("Conservative"):
+        if speaker.startswith("Conservative"):
             return "Neutral Analyst"
         return "Aggressive Analyst"

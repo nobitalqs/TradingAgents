@@ -1,121 +1,122 @@
-# TradingAgents/graph/reflection.py
+"""Reflection system — 5 reflectors update memories from outcomes.
 
-from typing import Dict, Any
-from langchain_openai import ChatOpenAI
+Shared reflect_memories() logic used by both manual reflect_and_remember()
+and the AutoReflector (T+N verification).
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+logger = logging.getLogger("tradingagents.graph.reflection")
+
+_REFLECTION_PROMPT = """You are an expert financial analyst reviewing trading decisions. Provide detailed analysis:
+
+1. REASONING: Was the decision correct (increased returns) or incorrect? Analyze factors:
+   - Market intelligence and technical indicators
+   - Price movement analysis
+   - News and sentiment analysis
+   - Fundamental data
+   - Weight each factor's importance
+
+2. IMPROVEMENT: For incorrect decisions, propose corrections with specific recommendations.
+
+3. SUMMARY: Lessons learned and how to apply them to similar future situations.
+
+4. KEY INSIGHT: Condense lessons into a concise sentence (<500 tokens) for memory storage."""
 
 
 class Reflector:
     """Handles reflection on decisions and updating memory."""
 
-    def __init__(self, quick_thinking_llm: ChatOpenAI):
-        """Initialize the reflector with an LLM."""
-        self.quick_thinking_llm = quick_thinking_llm
-        self.reflection_system_prompt = self._get_reflection_prompt()
+    def __init__(self, llm):
+        self.llm = llm
 
-    def _get_reflection_prompt(self) -> str:
-        """Get the system prompt for reflection."""
-        return """
-You are an expert financial analyst tasked with reviewing trading decisions/analysis and providing a comprehensive, step-by-step analysis. 
-Your goal is to deliver detailed insights into investment decisions and highlight opportunities for improvement, adhering strictly to the following guidelines:
-
-1. Reasoning:
-   - For each trading decision, determine whether it was correct or incorrect. A correct decision results in an increase in returns, while an incorrect decision does the opposite.
-   - Analyze the contributing factors to each success or mistake. Consider:
-     - Market intelligence.
-     - Technical indicators.
-     - Technical signals.
-     - Price movement analysis.
-     - Overall market data analysis 
-     - News analysis.
-     - Social media and sentiment analysis.
-     - Fundamental data analysis.
-     - Weight the importance of each factor in the decision-making process.
-
-2. Improvement:
-   - For any incorrect decisions, propose revisions to maximize returns.
-   - Provide a detailed list of corrective actions or improvements, including specific recommendations (e.g., changing a decision from HOLD to BUY on a particular date).
-
-3. Summary:
-   - Summarize the lessons learned from the successes and mistakes.
-   - Highlight how these lessons can be adapted for future trading scenarios and draw connections between similar situations to apply the knowledge gained.
-
-4. Query:
-   - Extract key insights from the summary into a concise sentence of no more than 1000 tokens.
-   - Ensure the condensed sentence captures the essence of the lessons and reasoning for easy reference.
-
-Adhere strictly to these instructions, and ensure your output is detailed, accurate, and actionable. You will also be given objective descriptions of the market from a price movements, technical indicator, news, and sentiment perspective to provide more context for your analysis.
-"""
-
-    def _extract_current_situation(self, current_state: Dict[str, Any]) -> str:
-        """Extract the current market situation from the state."""
-        curr_market_report = current_state["market_report"]
-        curr_sentiment_report = current_state["sentiment_report"]
-        curr_news_report = current_state["news_report"]
-        curr_fundamentals_report = current_state["fundamentals_report"]
-
-        return f"{curr_market_report}\n\n{curr_sentiment_report}\n\n{curr_news_report}\n\n{curr_fundamentals_report}"
+    def _extract_situation(self, state: dict[str, Any]) -> str:
+        """Extract market situation summary from state."""
+        parts = [
+            state.get("market_report", ""),
+            state.get("sentiment_report", ""),
+            state.get("news_report", ""),
+            state.get("fundamentals_report", ""),
+        ]
+        return "\n\n".join(p for p in parts if p)
 
     def _reflect_on_component(
-        self, component_type: str, report: str, situation: str, returns_losses
+        self, component: str, report: str, situation: str, returns_losses: Any
     ) -> str:
-        """Generate reflection for a component."""
+        """Generate reflection for one component."""
         messages = [
-            ("system", self.reflection_system_prompt),
-            (
-                "human",
-                f"Returns: {returns_losses}\n\nAnalysis/Decision: {report}\n\nObjective Market Reports for Reference: {situation}",
-            ),
+            ("system", _REFLECTION_PROMPT),
+            ("human", (
+                f"Component: {component}\n"
+                f"Returns/Losses: {returns_losses}\n\n"
+                f"Analysis/Decision:\n{report}\n\n"
+                f"Market Context:\n{situation}"
+            )),
         ]
+        try:
+            return self.llm.invoke(messages).content
+        except Exception as e:
+            logger.error(f"Reflection failed for {component}: {e}")
+            return f"Reflection failed: {e}"
 
-        result = self.quick_thinking_llm.invoke(messages).content
-        return result
+    def reflect_bull(self, state: dict, returns_losses: Any, memory) -> None:
+        situation = self._extract_situation(state)
+        debate = state.get("investment_debate_state", {})
+        history = debate.get("bull_history", [])
+        report = "\n".join(history) if isinstance(history, list) else str(history)
+        result = self._reflect_on_component("BULL", report, situation, returns_losses)
+        memory.add_situations([(situation, result)])
 
-    def reflect_bull_researcher(self, current_state, returns_losses, bull_memory):
-        """Reflect on bull researcher's analysis and update memory."""
-        situation = self._extract_current_situation(current_state)
-        bull_debate_history = current_state["investment_debate_state"]["bull_history"]
+    def reflect_bear(self, state: dict, returns_losses: Any, memory) -> None:
+        situation = self._extract_situation(state)
+        debate = state.get("investment_debate_state", {})
+        history = debate.get("bear_history", [])
+        report = "\n".join(history) if isinstance(history, list) else str(history)
+        result = self._reflect_on_component("BEAR", report, situation, returns_losses)
+        memory.add_situations([(situation, result)])
 
-        result = self._reflect_on_component(
-            "BULL", bull_debate_history, situation, returns_losses
-        )
-        bull_memory.add_situations([(situation, result)])
+    def reflect_trader(self, state: dict, returns_losses: Any, memory) -> None:
+        situation = self._extract_situation(state)
+        report = state.get("trader_investment_plan", "")
+        result = self._reflect_on_component("TRADER", report, situation, returns_losses)
+        memory.add_situations([(situation, result)])
 
-    def reflect_bear_researcher(self, current_state, returns_losses, bear_memory):
-        """Reflect on bear researcher's analysis and update memory."""
-        situation = self._extract_current_situation(current_state)
-        bear_debate_history = current_state["investment_debate_state"]["bear_history"]
+    def reflect_invest_judge(self, state: dict, returns_losses: Any, memory) -> None:
+        situation = self._extract_situation(state)
+        debate = state.get("investment_debate_state", {})
+        report = debate.get("judge_decision", "")
+        result = self._reflect_on_component("INVEST_JUDGE", report, situation, returns_losses)
+        memory.add_situations([(situation, result)])
 
-        result = self._reflect_on_component(
-            "BEAR", bear_debate_history, situation, returns_losses
-        )
-        bear_memory.add_situations([(situation, result)])
+    def reflect_risk_manager(self, state: dict, returns_losses: Any, memory) -> None:
+        situation = self._extract_situation(state)
+        debate = state.get("risk_debate_state", {})
+        report = debate.get("judge_decision", "")
+        result = self._reflect_on_component("RISK_JUDGE", report, situation, returns_losses)
+        memory.add_situations([(situation, result)])
 
-    def reflect_trader(self, current_state, returns_losses, trader_memory):
-        """Reflect on trader's decision and update memory."""
-        situation = self._extract_current_situation(current_state)
-        trader_decision = current_state["trader_investment_plan"]
 
-        result = self._reflect_on_component(
-            "TRADER", trader_decision, situation, returns_losses
-        )
-        trader_memory.add_situations([(situation, result)])
+def reflect_memories(
+    reflector: Reflector,
+    state: dict,
+    returns_losses: Any,
+    memories: dict[str, Any],
+) -> None:
+    """Shared reflection logic — calls all 5 reflectors.
 
-    def reflect_invest_judge(self, current_state, returns_losses, invest_judge_memory):
-        """Reflect on investment judge's decision and update memory."""
-        situation = self._extract_current_situation(current_state)
-        judge_decision = current_state["investment_debate_state"]["judge_decision"]
-
-        result = self._reflect_on_component(
-            "INVEST JUDGE", judge_decision, situation, returns_losses
-        )
-        invest_judge_memory.add_situations([(situation, result)])
-
-    def reflect_risk_manager(self, current_state, returns_losses, risk_manager_memory):
-        """Reflect on risk manager's decision and update memory."""
-        situation = self._extract_current_situation(current_state)
-        judge_decision = current_state["risk_debate_state"]["judge_decision"]
-
-        result = self._reflect_on_component(
-            "RISK JUDGE", judge_decision, situation, returns_losses
-        )
-        risk_manager_memory.add_situations([(situation, result)])
+    Args:
+        reflector: Reflector instance with LLM
+        state: Full agent state from last propagation
+        returns_losses: Return/loss data for this trade
+        memories: Dict with keys: bull_memory, bear_memory, trader_memory,
+                  invest_judge_memory, risk_manager_memory
+    """
+    reflector.reflect_bull(state, returns_losses, memories["bull_memory"])
+    reflector.reflect_bear(state, returns_losses, memories["bear_memory"])
+    reflector.reflect_trader(state, returns_losses, memories["trader_memory"])
+    reflector.reflect_invest_judge(state, returns_losses, memories["invest_judge_memory"])
+    reflector.reflect_risk_manager(state, returns_losses, memories["risk_manager_memory"])
+    logger.info("Reflection complete for all 5 components")
