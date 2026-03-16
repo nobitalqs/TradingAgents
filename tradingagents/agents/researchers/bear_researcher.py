@@ -1,61 +1,88 @@
-from langchain_core.messages import AIMessage
-import time
-import json
+"""Bear Researcher — advocates against investing, with fact-checking responsibility."""
+
+import logging
+
+logger = logging.getLogger("tradingagents.agents.researchers.bear")
 
 
 def create_bear_researcher(llm, memory):
-    def bear_node(state) -> dict:
-        investment_debate_state = state["investment_debate_state"]
-        history = investment_debate_state.get("history", "")
-        bear_history = investment_debate_state.get("bear_history", "")
+    """Create the Bear Researcher node.
 
-        current_response = investment_debate_state.get("current_response", "")
-        market_research_report = state["market_report"]
+    The bear researcher builds risk cases while also
+    fact-checking the bull's data sources for reliability.
+    """
+
+    def bear_node(state: dict) -> dict:
+        debate = state["investment_debate_state"]
+        history = debate.get("history", [])
+        bear_history = debate.get("bear_history", [])
+
+        current_response = debate.get("current_response", "")
+        market_report = state["market_report"]
         sentiment_report = state["sentiment_report"]
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        # Memory retrieval
+        curr_situation = (
+            f"{market_report}\n\n{sentiment_report}\n\n"
+            f"{news_report}\n\n{fundamentals_report}"
+        )
         past_memories = memory.get_memories(curr_situation, n_matches=2)
+        past_memory_str = "\n\n".join(
+            rec["recommendation"] for rec in past_memories
+        )
 
-        past_memory_str = ""
-        for i, rec in enumerate(past_memories, 1):
-            past_memory_str += rec["recommendation"] + "\n\n"
+        # Credibility context
+        credibility_note = ""
+        cred = state.get("data_credibility", {})
+        if cred.get("warnings"):
+            credibility_note = (
+                "\n\nDATA CREDIBILITY WARNINGS:\n"
+                + "\n".join(f"- {w}" for w in cred["warnings"])
+            )
 
-        prompt = f"""You are a Bear Analyst making the case against investing in the stock. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
+        prompt = f"""You are a Bear Analyst making the case against investing in the stock. Present well-reasoned arguments emphasizing risks, challenges, and negative indicators.
 
-Key points to focus on:
+Key responsibilities:
+1. RISKS: Market saturation, financial instability, macroeconomic threats
+2. COMPETITIVE WEAKNESSES: Weaker positioning, declining innovation, competitor threats
+3. NEGATIVE INDICATORS: Financial data, market trends, adverse news
+4. COUNTER BULL: Expose weaknesses or over-optimistic assumptions in bull arguments
+5. FACT-CHECK: Challenge any data or news cited by the Bull that comes from unverified sources. If Bull relies on a single news source for a key claim, flag as "SINGLE-SOURCE RISK". Cross-reference key claims against verified data (price action, SEC filings)
+6. LEARN FROM PAST: Apply lessons from similar past situations
 
-- Risks and Challenges: Highlight factors like market saturation, financial instability, or macroeconomic threats that could hinder the stock's performance.
-- Competitive Weaknesses: Emphasize vulnerabilities such as weaker market positioning, declining innovation, or threats from competitors.
-- Negative Indicators: Use evidence from financial data, market trends, or recent adverse news to support your position.
-- Bull Counterpoints: Critically analyze the bull argument with specific data and sound reasoning, exposing weaknesses or over-optimistic assumptions.
-- Engagement: Present your argument in a conversational style, directly engaging with the bull analyst's points and debating effectively rather than simply listing facts.
-
-Resources available:
-
-Market research report: {market_research_report}
-Social media sentiment report: {sentiment_report}
-Latest world affairs news: {news_report}
-Company fundamentals report: {fundamentals_report}
-Conversation history of the debate: {history}
+Resources:
+Market report: {market_report}
+Sentiment report: {sentiment_report}
+News report: {news_report}
+Fundamentals report: {fundamentals_report}
+Debate history: {_format_history(history)}
 Last bull argument: {current_response}
-Reflections from similar situations and lessons learned: {past_memory_str}
-Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the stock. You must also address reflections and learn from lessons and mistakes you made in the past.
-"""
+Past lessons: {past_memory_str}
+{credibility_note}
+
+Engage conversationally — debate the bull's points directly, don't just list facts."""
 
         response = llm.invoke(prompt)
-
         argument = f"Bear Analyst: {response.content}"
 
-        new_investment_debate_state = {
-            "history": history + "\n" + argument,
-            "bear_history": bear_history + "\n" + argument,
-            "bull_history": investment_debate_state.get("bull_history", ""),
-            "current_response": argument,
-            "count": investment_debate_state["count"] + 1,
+        return {
+            "investment_debate_state": {
+                "history": history + [argument],
+                "bear_history": bear_history + [argument],
+                "bull_history": debate.get("bull_history", []),
+                "current_response": argument,
+                "judge_decision": debate.get("judge_decision", ""),
+                "count": debate["count"] + 1,
+            }
         }
 
-        return {"investment_debate_state": new_investment_debate_state}
-
     return bear_node
+
+
+def _format_history(history: list[str]) -> str:
+    """Format debate history for prompt injection."""
+    if not history:
+        return "(No debate history yet)"
+    return "\n\n".join(history[-4:])
