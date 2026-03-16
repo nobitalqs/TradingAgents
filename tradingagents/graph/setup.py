@@ -1,24 +1,55 @@
-# TradingAgents/graph/setup.py
+"""Graph setup — assembles the LangGraph workflow with all nodes and edges.
 
-from typing import Dict, Any
-from langchain_openai import ChatOpenAI
-from langgraph.graph import END, StateGraph, START
+Architecture:
+  START → [Analysts sequential] → Extract Signals → [Invest Debate] →
+  Research Manager → Trader → [Risk Debate] → Risk Judge → END
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
-from tradingagents.agents import *
+from tradingagents.agents.analysts.fundamentals_analyst import create_fundamentals_analyst
+from tradingagents.agents.analysts.market_analyst import create_market_analyst
+from tradingagents.agents.analysts.news_analyst import create_news_analyst
+from tradingagents.agents.analysts.social_media_analyst import create_social_media_analyst
+from tradingagents.agents.managers.research_manager import create_research_manager
+from tradingagents.agents.managers.risk_manager import create_risk_manager
+from tradingagents.agents.researchers.bear_researcher import create_bear_researcher
+from tradingagents.agents.researchers.bull_researcher import create_bull_researcher
+from tradingagents.agents.risk_mgmt.aggressive_debator import create_aggressive_debator
+from tradingagents.agents.risk_mgmt.conservative_debator import create_conservative_debator
+from tradingagents.agents.risk_mgmt.neutral_debator import create_neutral_debator
+from tradingagents.agents.trader.trader import create_trader
 from tradingagents.agents.utils.agent_states import AgentState
+from tradingagents.agents.utils.agent_utils import create_msg_delete
+from tradingagents.constants import analyst_node_name, msg_clear_node_name, tools_node_name
+from tradingagents.graph.analyst_signals import create_extract_signals_node
+from tradingagents.graph.conditional_logic import ConditionalLogic
 
-from .conditional_logic import ConditionalLogic
+logger = logging.getLogger("tradingagents.graph.setup")
+
+# Registry: analyst_type → creator function
+ANALYST_REGISTRY: dict[str, callable] = {
+    "market": create_market_analyst,
+    "social": create_social_media_analyst,
+    "news": create_news_analyst,
+    "fundamentals": create_fundamentals_analyst,
+}
 
 
 class GraphSetup:
-    """Handles the setup and configuration of the agent graph."""
+    """Assembles and compiles the full LangGraph workflow."""
 
     def __init__(
         self,
-        quick_thinking_llm: ChatOpenAI,
-        deep_thinking_llm: ChatOpenAI,
-        tool_nodes: Dict[str, ToolNode],
+        quick_thinking_llm: Any,
+        deep_thinking_llm: Any,
+        tool_nodes: dict[str, ToolNode],
         bull_memory,
         bear_memory,
         trader_memory,
@@ -26,136 +57,116 @@ class GraphSetup:
         risk_manager_memory,
         conditional_logic: ConditionalLogic,
     ):
-        """Initialize with required components."""
-        self.quick_thinking_llm = quick_thinking_llm
-        self.deep_thinking_llm = deep_thinking_llm
+        self.quick_llm = quick_thinking_llm
+        self.deep_llm = deep_thinking_llm
         self.tool_nodes = tool_nodes
         self.bull_memory = bull_memory
         self.bear_memory = bear_memory
         self.trader_memory = trader_memory
         self.invest_judge_memory = invest_judge_memory
         self.risk_manager_memory = risk_manager_memory
-        self.conditional_logic = conditional_logic
+        self.cond = conditional_logic
 
     def setup_graph(
-        self, selected_analysts=["market", "social", "news", "fundamentals"]
-    ):
+        self,
+        selected_analysts: list[str] | None = None,
+    ) -> Any:
         """Set up and compile the agent workflow graph.
 
         Args:
-            selected_analysts (list): List of analyst types to include. Options are:
-                - "market": Market analyst
-                - "social": Social media analyst
-                - "news": News analyst
-                - "fundamentals": Fundamentals analyst
+            selected_analysts: List of analyst types to include.
+                Defaults to all 4: market, social, news, fundamentals.
+
+        Returns:
+            Compiled LangGraph workflow.
         """
-        if len(selected_analysts) == 0:
-            raise ValueError("Trading Agents Graph Setup Error: no analysts selected!")
+        if selected_analysts is None:
+            selected_analysts = ["market", "social", "news", "fundamentals"]
 
-        # Create analyst nodes
-        analyst_nodes = {}
-        delete_nodes = {}
-        tool_nodes = {}
+        if not selected_analysts:
+            raise ValueError("No analysts selected for graph setup")
 
-        if "market" in selected_analysts:
-            analyst_nodes["market"] = create_market_analyst(
-                self.quick_thinking_llm
-            )
-            delete_nodes["market"] = create_msg_delete()
-            tool_nodes["market"] = self.tool_nodes["market"]
-
-        if "social" in selected_analysts:
-            analyst_nodes["social"] = create_social_media_analyst(
-                self.quick_thinking_llm
-            )
-            delete_nodes["social"] = create_msg_delete()
-            tool_nodes["social"] = self.tool_nodes["social"]
-
-        if "news" in selected_analysts:
-            analyst_nodes["news"] = create_news_analyst(
-                self.quick_thinking_llm
-            )
-            delete_nodes["news"] = create_msg_delete()
-            tool_nodes["news"] = self.tool_nodes["news"]
-
-        if "fundamentals" in selected_analysts:
-            analyst_nodes["fundamentals"] = create_fundamentals_analyst(
-                self.quick_thinking_llm
-            )
-            delete_nodes["fundamentals"] = create_msg_delete()
-            tool_nodes["fundamentals"] = self.tool_nodes["fundamentals"]
-
-        # Create researcher and manager nodes
-        bull_researcher_node = create_bull_researcher(
-            self.quick_thinking_llm, self.bull_memory
-        )
-        bear_researcher_node = create_bear_researcher(
-            self.quick_thinking_llm, self.bear_memory
-        )
-        research_manager_node = create_research_manager(
-            self.deep_thinking_llm, self.invest_judge_memory
-        )
-        trader_node = create_trader(self.quick_thinking_llm, self.trader_memory)
-
-        # Create risk analysis nodes
-        aggressive_analyst = create_aggressive_debator(self.quick_thinking_llm)
-        neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
-        conservative_analyst = create_conservative_debator(self.quick_thinking_llm)
-        risk_manager_node = create_risk_manager(
-            self.deep_thinking_llm, self.risk_manager_memory
-        )
-
-        # Create workflow
         workflow = StateGraph(AgentState)
 
-        # Add analyst nodes to the graph
-        for analyst_type, node in analyst_nodes.items():
-            workflow.add_node(f"{analyst_type.capitalize()} Analyst", node)
-            workflow.add_node(
-                f"Msg Clear {analyst_type.capitalize()}", delete_nodes[analyst_type]
-            )
-            workflow.add_node(f"tools_{analyst_type}", tool_nodes[analyst_type])
+        # ── 1. Analyst nodes (sequential with tool loops) ──
+        for analyst_type in selected_analysts:
+            creator = ANALYST_REGISTRY.get(analyst_type)
+            if not creator:
+                raise ValueError(f"Unknown analyst type: {analyst_type}")
 
-        # Add other nodes
-        workflow.add_node("Bull Researcher", bull_researcher_node)
-        workflow.add_node("Bear Researcher", bear_researcher_node)
-        workflow.add_node("Research Manager", research_manager_node)
-        workflow.add_node("Trader", trader_node)
-        workflow.add_node("Aggressive Analyst", aggressive_analyst)
-        workflow.add_node("Neutral Analyst", neutral_analyst)
-        workflow.add_node("Conservative Analyst", conservative_analyst)
-        workflow.add_node("Risk Judge", risk_manager_node)
+            node_name = analyst_node_name(analyst_type)
+            clear_name = msg_clear_node_name(analyst_type)
+            tools_name = tools_node_name(analyst_type)
 
-        # Define edges
-        # Start with the first analyst
-        first_analyst = selected_analysts[0]
-        workflow.add_edge(START, f"{first_analyst.capitalize()} Analyst")
+            workflow.add_node(node_name, creator(self.quick_llm))
+            workflow.add_node(clear_name, create_msg_delete())
+            workflow.add_node(tools_name, self.tool_nodes[analyst_type])
 
-        # Connect analysts in sequence
+        # ── 2. Extract Analyst Signals node ──
+        workflow.add_node("Extract Signals", create_extract_signals_node())
+
+        # ── 3. Investment debate nodes ──
+        workflow.add_node(
+            "Bull Researcher",
+            create_bull_researcher(self.quick_llm, self.bull_memory),
+        )
+        workflow.add_node(
+            "Bear Researcher",
+            create_bear_researcher(self.quick_llm, self.bear_memory),
+        )
+        workflow.add_node(
+            "Research Manager",
+            create_research_manager(self.deep_llm, self.invest_judge_memory),
+        )
+
+        # ── 4. Trader node ──
+        workflow.add_node(
+            "Trader",
+            create_trader(self.quick_llm, self.trader_memory),
+        )
+
+        # ── 5. Risk debate nodes ──
+        workflow.add_node("Aggressive Analyst", create_aggressive_debator(self.quick_llm))
+        workflow.add_node("Conservative Analyst", create_conservative_debator(self.quick_llm))
+        workflow.add_node("Neutral Analyst", create_neutral_debator(self.quick_llm))
+        workflow.add_node(
+            "Risk Judge",
+            create_risk_manager(self.deep_llm, self.risk_manager_memory),
+        )
+
+        # ── Edges: Analyst sequence ──
+        first = selected_analysts[0]
+        workflow.add_edge(START, analyst_node_name(first))
+
         for i, analyst_type in enumerate(selected_analysts):
-            current_analyst = f"{analyst_type.capitalize()} Analyst"
-            current_tools = f"tools_{analyst_type}"
-            current_clear = f"Msg Clear {analyst_type.capitalize()}"
+            node_name = analyst_node_name(analyst_type)
+            tools_name = tools_node_name(analyst_type)
+            clear_name = msg_clear_node_name(analyst_type)
 
-            # Add conditional edges for current analyst
+            # Analyst → [conditional] → tools OR clear
+            router = self.cond.make_analyst_router(analyst_type)
             workflow.add_conditional_edges(
-                current_analyst,
-                getattr(self.conditional_logic, f"should_continue_{analyst_type}"),
-                [current_tools, current_clear],
+                node_name,
+                router,
+                [tools_name, clear_name],
             )
-            workflow.add_edge(current_tools, current_analyst)
+            # Tools → back to analyst (tool loop)
+            workflow.add_edge(tools_name, node_name)
 
-            # Connect to next analyst or to Bull Researcher if this is the last analyst
+            # Clear → next analyst OR extract signals
             if i < len(selected_analysts) - 1:
-                next_analyst = f"{selected_analysts[i+1].capitalize()} Analyst"
-                workflow.add_edge(current_clear, next_analyst)
+                next_name = analyst_node_name(selected_analysts[i + 1])
+                workflow.add_edge(clear_name, next_name)
             else:
-                workflow.add_edge(current_clear, "Bull Researcher")
+                workflow.add_edge(clear_name, "Extract Signals")
 
-        # Add remaining edges
+        # ── Edges: Extract Signals → Debate ──
+        workflow.add_edge("Extract Signals", "Bull Researcher")
+
+        # ── Edges: Investment debate ──
         workflow.add_conditional_edges(
             "Bull Researcher",
-            self.conditional_logic.should_continue_debate,
+            self.cond.should_continue_debate,
             {
                 "Bear Researcher": "Bear Researcher",
                 "Research Manager": "Research Manager",
@@ -163,17 +174,21 @@ class GraphSetup:
         )
         workflow.add_conditional_edges(
             "Bear Researcher",
-            self.conditional_logic.should_continue_debate,
+            self.cond.should_continue_debate,
             {
                 "Bull Researcher": "Bull Researcher",
                 "Research Manager": "Research Manager",
             },
         )
+
+        # ── Edges: Manager → Trader → Risk debate ──
         workflow.add_edge("Research Manager", "Trader")
         workflow.add_edge("Trader", "Aggressive Analyst")
+
+        # ── Edges: Risk debate rotation ──
         workflow.add_conditional_edges(
             "Aggressive Analyst",
-            self.conditional_logic.should_continue_risk_analysis,
+            self.cond.should_continue_risk_analysis,
             {
                 "Conservative Analyst": "Conservative Analyst",
                 "Risk Judge": "Risk Judge",
@@ -181,7 +196,7 @@ class GraphSetup:
         )
         workflow.add_conditional_edges(
             "Conservative Analyst",
-            self.conditional_logic.should_continue_risk_analysis,
+            self.cond.should_continue_risk_analysis,
             {
                 "Neutral Analyst": "Neutral Analyst",
                 "Risk Judge": "Risk Judge",
@@ -189,7 +204,7 @@ class GraphSetup:
         )
         workflow.add_conditional_edges(
             "Neutral Analyst",
-            self.conditional_logic.should_continue_risk_analysis,
+            self.cond.should_continue_risk_analysis,
             {
                 "Aggressive Analyst": "Aggressive Analyst",
                 "Risk Judge": "Risk Judge",
@@ -198,5 +213,9 @@ class GraphSetup:
 
         workflow.add_edge("Risk Judge", END)
 
-        # Compile and return
-        return workflow.compile()
+        compiled = workflow.compile()
+        logger.info(
+            f"Graph compiled: {len(selected_analysts)} analysts, "
+            f"{len(compiled.nodes)} total nodes"
+        )
+        return compiled
