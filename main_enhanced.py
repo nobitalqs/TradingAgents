@@ -15,6 +15,7 @@ Usage:
 import asyncio
 import copy
 import logging
+import os
 import signal
 from datetime import datetime
 
@@ -31,32 +32,67 @@ logger = logging.getLogger("tradingagents.main")
 
 
 def build_config() -> dict:
-    """Build enhanced configuration. Override as needed."""
+    """Build enhanced configuration.
+
+    Environment variables:
+        OPENAI_API_KEY              — Required. OpenAI API key.
+        FEISHU_WEBHOOK_URL          — Feishu bot webhook URL for notifications.
+        FEISHU_WEBHOOK_SECRET       — (Optional) Feishu webhook signing secret.
+        TRADINGAGENTS_TICKERS       — Comma-separated tickers (default: NVDA,AAPL,TSLA).
+        TRADINGAGENTS_CRON          — Cron expression (default: 30 21 * * 1-5, i.e. US pre-market 9:30 ET).
+        TRADINGAGENTS_TIMEZONE      — Timezone (default: Asia/Shanghai).
+        TRADINGAGENTS_GATEWAY_TOKEN — (Optional) Bearer token for gateway auth. Empty = no auth.
+        TRADINGAGENTS_GATEWAY_PORT  — Gateway HTTP port (default: 8899).
+    """
     config = copy.deepcopy(DEFAULT_CONFIG)
 
-    # LLM — adjust to your provider
+    # ── LLM ──
     config["llm_provider"] = "openai"
-    config["deep_think_llm"] = "gpt-5.2"
-    config["quick_think_llm"] = "gpt-5-mini"
+    config["deep_think_llm"] = "gpt-4o-mini"
+    config["quick_think_llm"] = "gpt-4o-mini"
 
-    # Hooks
+    # ── Hooks ──
     config["hooks"]["entries"]["journal"]["enabled"] = True
     config["hooks"]["entries"]["ratelimit"]["enabled"] = True
     config["hooks"]["entries"]["data_integrity"]["enabled"] = True
 
-    # Scheduler (disabled by default — uncomment to enable)
-    # config["scheduler"]["enabled"] = True
-    # config["scheduler"]["jobs"] = [
-    #     {
-    #         "name": "pre_market_scan",
-    #         "cron": "30 8 * * 1-5",
-    #         "tickers": ["NVDA", "AAPL", "TSLA"],
-    #     },
-    # ]
+    # ── Feishu notification ──
+    feishu_url = os.environ.get("FEISHU_WEBHOOK_URL", "")
+    if feishu_url:
+        feishu_cfg: dict = {"webhook_url": feishu_url}
+        feishu_secret = os.environ.get("FEISHU_WEBHOOK_SECRET", "")
+        if feishu_secret:
+            feishu_cfg["secret"] = feishu_secret
+        config["hooks"]["entries"]["notify"] = {
+            "enabled": True,
+            "notifier": "feishu",
+            "notifier_config": feishu_cfg,
+        }
 
-    # Heartbeat (disabled by default)
-    # config["heartbeat"]["enabled"] = True
-    # config["heartbeat"]["watchlist"] = ["NVDA", "AAPL", "TSLA"]
+    # ── Scheduler ──
+    tickers = os.environ.get("TRADINGAGENTS_TICKERS", "NVDA,AAPL,TSLA")
+    cron_expr = os.environ.get("TRADINGAGENTS_CRON", "30 21 * * 1-5")
+    timezone = os.environ.get("TRADINGAGENTS_TIMEZONE", "Asia/Shanghai")
+
+    config["scheduler"]["enabled"] = True
+    config["scheduler"]["timezone"] = timezone
+    config["scheduler"]["jobs"] = [
+        {
+            "name": "daily_analysis",
+            "cron": cron_expr,
+            "tickers": [t.strip() for t in tickers.split(",") if t.strip()],
+            "enabled": True,
+        },
+    ]
+
+    # ── Message Gateway (on-demand analysis via HTTP) ──
+    config["message_gateway"]["enabled"] = True
+    config["message_gateway"]["port"] = int(
+        os.environ.get("TRADINGAGENTS_GATEWAY_PORT", "8899")
+    )
+    config["message_gateway"]["auth_token"] = os.environ.get(
+        "TRADINGAGENTS_GATEWAY_TOKEN", ""
+    )
 
     return config
 

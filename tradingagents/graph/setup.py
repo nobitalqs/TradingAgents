@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import RetryPolicy
 from langgraph.prebuilt import ToolNode
 
 from tradingagents.agents.analysts.fundamentals_analyst import create_fundamentals_analyst
@@ -32,6 +33,15 @@ from tradingagents.graph.analyst_signals import create_extract_signals_node
 from tradingagents.graph.conditional_logic import ConditionalLogic
 
 logger = logging.getLogger("tradingagents.graph.setup")
+
+# Retry policy for LLM-backed nodes — survives transient 429/timeout/5xx.
+NODE_RETRY = RetryPolicy(
+    max_attempts=3,
+    initial_interval=10.0,
+    backoff_factor=2.0,
+    max_interval=120.0,
+    jitter=True,
+)
 
 # Registry: analyst_type → creator function
 ANALYST_REGISTRY: dict[str, callable] = {
@@ -98,7 +108,7 @@ class GraphSetup:
             clear_name = msg_clear_node_name(analyst_type)
             tools_name = tools_node_name(analyst_type)
 
-            workflow.add_node(node_name, creator(self.quick_llm))
+            workflow.add_node(node_name, creator(self.quick_llm), retry=NODE_RETRY)
             workflow.add_node(clear_name, create_msg_delete())
             workflow.add_node(tools_name, self.tool_nodes[analyst_type])
 
@@ -109,29 +119,34 @@ class GraphSetup:
         workflow.add_node(
             "Bull Researcher",
             create_bull_researcher(self.quick_llm, self.bull_memory),
+            retry=NODE_RETRY,
         )
         workflow.add_node(
             "Bear Researcher",
             create_bear_researcher(self.quick_llm, self.bear_memory),
+            retry=NODE_RETRY,
         )
         workflow.add_node(
             "Research Manager",
             create_research_manager(self.deep_llm, self.invest_judge_memory),
+            retry=NODE_RETRY,
         )
 
         # ── 4. Trader node ──
         workflow.add_node(
             "Trader",
             create_trader(self.quick_llm, self.trader_memory),
+            retry=NODE_RETRY,
         )
 
         # ── 5. Risk debate nodes ──
-        workflow.add_node("Aggressive Analyst", create_aggressive_debator(self.quick_llm))
-        workflow.add_node("Conservative Analyst", create_conservative_debator(self.quick_llm))
-        workflow.add_node("Neutral Analyst", create_neutral_debator(self.quick_llm))
+        workflow.add_node("Aggressive Analyst", create_aggressive_debator(self.quick_llm), retry=NODE_RETRY)
+        workflow.add_node("Conservative Analyst", create_conservative_debator(self.quick_llm), retry=NODE_RETRY)
+        workflow.add_node("Neutral Analyst", create_neutral_debator(self.quick_llm), retry=NODE_RETRY)
         workflow.add_node(
             "Risk Judge",
             create_risk_manager(self.deep_llm, self.risk_manager_memory),
+            retry=NODE_RETRY,
         )
 
         # ── Edges: Analyst sequence ──

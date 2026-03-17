@@ -217,3 +217,10 @@ __marimo__/
 
 # Cache
 **/data_cache/
+
+# TradingAgents runtime artifacts
+*.db
+eval_results/
+journals/
+backtest_results_*.json
+.claude/

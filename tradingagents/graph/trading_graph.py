@@ -28,6 +28,8 @@ from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.hooks.base import HookContext, HookEvent
 from tradingagents.llm_clients import create_llm_client
 
+from tradingagents.learning.persistence import MemoryStore
+
 from .conditional_logic import ConditionalLogic
 from .propagation import Propagator
 from .reflection import Reflector, reflect_memories
@@ -133,6 +135,13 @@ class TradingAgentsGraph:
             except ImportError:
                 logger.warning("Verification module not available")
 
+        # Persistence
+        db_path = self.config.get("learning", {}).get("db_path", "./tradingagents_memory.db")
+        self.memory_store = MemoryStore(db_path=db_path)
+
+        # Load historical memories from SQLite into BM25
+        self._load_persisted_memories()
+
         # State tracking
         self.curr_state = None
         self.ticker = None
@@ -141,6 +150,25 @@ class TradingAgentsGraph:
         # Compile graph
         analysts = selected_analysts or ["market", "social", "news", "fundamentals"]
         self.graph = self.graph_setup.setup_graph(analysts)
+
+    def _load_persisted_memories(self) -> None:
+        """Load historical memories from SQLite back into BM25 indexes."""
+        memory_map = {
+            "bull_memory": self.bull_memory,
+            "bear_memory": self.bear_memory,
+            "trader_memory": self.trader_memory,
+            "invest_judge_memory": self.invest_judge_memory,
+            "risk_manager_memory": self.risk_manager_memory,
+        }
+        total = 0
+        for name, memory in memory_map.items():
+            situations = self.memory_store.load_memories(name)
+            if situations:
+                memory.add_situations(situations)
+                total += len(situations)
+
+        if total > 0:
+            logger.info("Loaded %d historical memories from SQLite", total)
 
     def _get_provider_kwargs(self) -> dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
@@ -256,7 +284,74 @@ class TradingAgentsGraph:
             },
         )
 
+        # ── Persist analysis result for T+N reflection ──
+        try:
+            consensus = final_state.get("analyst_consensus", {})
+            confidence = consensus.get("confidence", "") if isinstance(consensus, dict) else ""
+            self.memory_store.save_analysis_result(
+                ticker=company_name,
+                trade_date=str(trade_date),
+                signal=decision,
+                confidence=confidence,
+                full_decision=final_state.get("final_trade_decision", ""),
+                state_json=json.dumps(
+                    self._serialize_state(final_state), default=str
+                ),
+            )
+        except Exception:
+            logger.exception("Failed to persist analysis result")
+
         return final_state, decision
+
+    @staticmethod
+    def _serialize_state(state: dict) -> dict:
+        """Extract serializable fields from agent state for DB storage."""
+        invest_debate = state.get("investment_debate_state", {})
+        risk_debate = state.get("risk_debate_state", {})
+        return {
+            "company_of_interest": state.get("company_of_interest", ""),
+            "trade_date": state.get("trade_date", ""),
+            "market_report": state.get("market_report", ""),
+            "sentiment_report": state.get("sentiment_report", ""),
+            "news_report": state.get("news_report", ""),
+            "fundamentals_report": state.get("fundamentals_report", ""),
+            "analyst_consensus": state.get("analyst_consensus", {}),
+            "data_credibility": state.get("data_credibility", {}),
+            "investment_debate_state": {
+                "bull_history": invest_debate.get("bull_history", []),
+                "bear_history": invest_debate.get("bear_history", []),
+                "judge_decision": invest_debate.get("judge_decision", ""),
+            },
+            "investment_plan": state.get("investment_plan", ""),
+            "trader_investment_plan": state.get("trader_investment_plan", ""),
+            "risk_debate_state": {
+                "judge_decision": risk_debate.get("judge_decision", ""),
+            },
+            "final_trade_decision": state.get("final_trade_decision", ""),
+        }
+
+    def auto_reflect_pending(self, as_of_date: str = "") -> list[dict]:
+        """Run T+N reflection on all pending analysis results.
+
+        Returns list of reflection result dicts.
+        """
+        from tradingagents.learning.auto_reflect import AutoReflector
+
+        memories = {
+            "bull_memory": self.bull_memory,
+            "bear_memory": self.bear_memory,
+            "trader_memory": self.trader_memory,
+            "invest_judge_memory": self.invest_judge_memory,
+            "risk_manager_memory": self.risk_manager_memory,
+        }
+        horizon = self.config.get("learning", {}).get("reflection_horizon_days", 7)
+        reflector = AutoReflector(
+            reflector=self.reflector,
+            memory_store=self.memory_store,
+            memories=memories,
+            horizon=horizon,
+        )
+        return reflector.reflect_pending(as_of_date=as_of_date)
 
     def _log_state(self, trade_date: str, final_state: dict) -> None:
         """Log the final state to a JSON file."""

@@ -125,10 +125,15 @@ class MemoryStore:
                 )
 
     def load_memories(self, memory_name: str) -> list[tuple[str, str]]:
-        """Load all (situation, recommendation) pairs for a memory."""
+        """Load all (situation, recommendation) pairs for a memory.
+
+        Returns in insertion order (oldest first) so that FIFO eviction
+        in FinancialSituationMemory keeps the newest entries.
+        """
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT situation, recommendation FROM memories WHERE memory_name = ?",
+                "SELECT situation, recommendation FROM memories "
+                "WHERE memory_name = ? ORDER BY rowid",
                 (memory_name,),
             ).fetchall()
         return [(row["situation"], row["recommendation"]) for row in rows]
@@ -218,6 +223,31 @@ class MemoryStore:
                 """,
                 (actual_return, int(direction_correct), ticker, trade_date),
             )
+
+    def get_reflected_results(
+        self, ticker: str = "", limit: int = 0
+    ) -> list[dict]:
+        """Get all reflected analysis results, optionally filtered by ticker.
+
+        Returns rows where reflected=1, ordered by trade_date.
+        """
+        query = """
+            SELECT ticker, trade_date, signal, confidence,
+                   actual_return, direction_correct
+            FROM analysis_results
+            WHERE reflected = 1
+        """
+        params: list = []
+        if ticker:
+            query += " AND ticker = ?"
+            params.append(ticker)
+        query += " ORDER BY trade_date"
+        if limit > 0:
+            query += f" LIMIT {limit}"
+
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Timing

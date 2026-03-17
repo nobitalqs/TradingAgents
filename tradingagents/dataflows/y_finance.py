@@ -128,6 +128,21 @@ def get_stock_stats_indicators_window(
         ),
     }
 
+    # Map common LLM aliases to valid indicator names
+    _ALIASES = {
+        "ma": "close_50_sma",
+        "sma": "close_50_sma",
+        "sma_50": "close_50_sma",
+        "sma_200": "close_200_sma",
+        "ema": "close_10_ema",
+        "ema_10": "close_10_ema",
+        "bollinger": "boll",
+        "bollinger_bands": "boll",
+        "bb": "boll",
+        "moving_average": "close_50_sma",
+    }
+    indicator = _ALIASES.get(indicator.lower(), indicator)
+
     if indicator not in best_ind_params:
         raise ValueError(
             f"Indicator {indicator} is not supported. Please choose from: {list(best_ind_params.keys())}"
